@@ -1,0 +1,42 @@
+{
+  "name": "@exotjs/adapter-uws",
+  "version": "0.0.1",
+  "description": "uWebSockets.js adapter for Exot server.",
+  "author": "Daniel Regeci",
+  "license": "MIT",
+  "keywords": [
+    "exot",
+    "uWebSockets.js",
+    "uWebSockets",
+    "uws"
+  ],
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "type": "module",
+  "scripts": {
+    "build": "rimraf dist && tsc -p tsconfig.build.json",
+    "test": "vitest"
+  },
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@exotjs/exot": "^0.0.2",
+    "uWebSockets.js": "uNetworking/uWebSockets.js#v20.34.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.9.0",
+    "rimraf": "^5.0.5",
+    "ts-node": "^10.9.1",
+    "tsx": "^4.0.0",
+    "typescript": "^5.2.2",
+    "vitest": "^1.0.1"
+  }
+}
