@@ -4,7 +4,8 @@ import { awaitMaybePromise, parseFormData } from '@exotjs/exot/helpers';
 import { HttpHeaders } from '@exotjs/exot/headers';
 import { HttpRequest } from '@exotjs/exot/request';
 const textDecoder = new TextDecoder();
-export default () => new UwsAdapter();
+export const adapter = () => new UwsAdapter();
+export default adapter;
 export class UwsAdapter {
     static defaultWebSocketOptions() {
         return {
@@ -69,9 +70,9 @@ export class UwsAdapter {
             return awaitMaybePromise(() => exot.handle(ctx), () => {
                 res.resume();
                 if (!res.aborted) {
-                    this.#writeHead(ctx, res, ctx.set.body);
-                    if (ctx.set.body instanceof Readable) {
-                        this.#pipeStreamToResponse(ctx, ctx.set.body, res);
+                    this.#writeHead(ctx, res, ctx.res.body);
+                    if (ctx.res.body instanceof Readable) {
+                        this.#pipeStreamToResponse(ctx, ctx.res.body, res);
                     }
                     else {
                         ctx.destroy();
@@ -95,8 +96,8 @@ export class UwsAdapter {
     }
     #writeHead(ctx, res, body) {
         res.cork(() => {
-            res.writeStatus(String(ctx.set.status || 200));
-            const headers = ctx.set.headers;
+            res.writeStatus(String(ctx.res.status || 200));
+            const headers = ctx.res.headers;
             for (let k in headers.map) {
                 const v = headers.map[k];
                 if (v !== null) {

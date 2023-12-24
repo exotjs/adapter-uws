@@ -3,8 +3,8 @@ import { Exot } from '@exotjs/exot';
 import { HttpHeaders } from '@exotjs/exot/headers';
 import { HttpRequest } from '@exotjs/exot/request';
 import type { Adapter, WsHandler } from '@exotjs/exot/types';
-declare const _default: () => UwsAdapter;
-export default _default;
+export declare const adapter: () => UwsAdapter;
+export default adapter;
 export declare class UwsAdapter implements Adapter {
     #private;
     static defaultWebSocketOptions<UserData = unknown>(): WebSocketBehavior<UserData>;

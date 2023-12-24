@@ -18,7 +18,9 @@ import type { Adapter, ContextInterface, WsHandler } from '@exotjs/exot/types';
 
 const textDecoder = new TextDecoder();
 
-export default () => new UwsAdapter();
+export const adapter = () => new UwsAdapter();
+
+export default adapter;
 
 export class UwsAdapter implements Adapter {
   static defaultWebSocketOptions<UserData = unknown>(): WebSocketBehavior<UserData> {
@@ -96,9 +98,9 @@ export class UwsAdapter implements Adapter {
         () => {
           res.resume();
           if (!res.aborted) {
-            this.#writeHead(ctx, res, ctx.set.body);
-            if (ctx.set.body instanceof Readable) {
-              this.#pipeStreamToResponse(ctx, ctx.set.body, res);
+            this.#writeHead(ctx, res, ctx.res.body);
+            if (ctx.res.body instanceof Readable) {
+              this.#pipeStreamToResponse(ctx, ctx.res.body, res);
             } else {
               ctx.destroy();
             }
@@ -123,8 +125,8 @@ export class UwsAdapter implements Adapter {
 
   #writeHead(ctx: ContextInterface, res: HttpResponse, body?: any) {
     res.cork(() => {
-      res.writeStatus(String(ctx.set.status || 200));
-      const headers = ctx.set.headers as HttpHeaders;
+      res.writeStatus(String(ctx.res.status || 200));
+      const headers = ctx.res.headers as HttpHeaders;
       for (let k in headers.map) {
         const v = headers.map[k];
         if (v !== null) {

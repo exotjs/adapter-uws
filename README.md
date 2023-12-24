@@ -3,7 +3,8 @@
 ## Usage
 
 ```js
-import adapter from '@exotjs/adapter-uws';
+import { Exot } from '@exotjs/exot';
+import { adapter } from '@exotjs/adapter-uws';
 
 new Exot()
   // mount uWebSockets.js adapter
