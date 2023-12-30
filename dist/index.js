@@ -1,8 +1,9 @@
 import { Readable } from 'node:stream';
 import { App as uWebSockets, SHARED_COMPRESSOR, us_socket_local_port, us_listen_socket_close, } from 'uWebSockets.js';
 import { awaitMaybePromise, parseFormData } from '@exotjs/exot/helpers';
-import { HttpHeaders } from '@exotjs/exot/headers';
-import { HttpRequest } from '@exotjs/exot/request';
+import { ExotHeaders } from '@exotjs/exot/headers';
+import { ExotRequest } from '@exotjs/exot/request';
+import { ExotWebSocket } from '@exotjs/exot/websocket';
 const textDecoder = new TextDecoder();
 export const adapter = () => new UwsAdapter();
 export default adapter;
@@ -10,7 +11,7 @@ export class UwsAdapter {
     static defaultWebSocketOptions() {
         return {
             compression: SHARED_COMPRESSOR,
-            idleTimeout: 120,
+            idleTimeout: 30,
             maxBackpressure: 1024,
             maxPayloadLength: 16 * 1024 * 1024, // 16MB
         };
@@ -45,22 +46,18 @@ export class UwsAdapter {
             });
         });
     }
-    ws(path, handler) {
-        this.#uws.ws(path, {
-            ...UwsAdapter.defaultWebSocketOptions(),
-            open: handler.open,
-            close: handler.close,
-            message: handler.message,
-            upgrade: async (res, req, context) => {
-                if (handler.upgrade) {
-                    // TODO:
-                    // await handler.upgrade(new UwsRequest(req, res), res);
-                }
-                res.upgrade({}, req.getHeader('sec-websocket-key'), req.getHeader('sec-websocket-protocol'), req.getHeader('sec-websocket-extensions'), context);
-            },
-        });
-    }
     mount(exot) {
+        this.#mountRequestHandler(exot);
+        this.#mountWebSocketHandler(exot);
+    }
+    upgradeRequest(ctx, handler) {
+        const { raw, rawRes, rawContext } = ctx.req;
+        rawRes.upgrade({
+            ctx,
+            handler,
+        }, raw.getHeader('sec-websocket-key'), raw.getHeader('sec-websocket-protocol'), raw.getHeader('sec-websocket-extensions'), rawContext);
+    }
+    #mountRequestHandler(exot) {
         this.#uws.any('/*', (res, req) => {
             res.pause();
             res.onAborted(() => {
@@ -92,6 +89,54 @@ export class UwsAdapter {
                     ctx.destroy();
                 }
             });
+        });
+    }
+    #mountWebSocketHandler(exot) {
+        this.#uws.ws('/*', {
+            close(ws) {
+                const userData = ws.getUserData();
+                if (userData?.handler?.close) {
+                    userData.handler.close(userData.ws, userData.ctx);
+                }
+            },
+            drain(ws) {
+                // TODO:
+            },
+            message(ws, message) {
+                const userData = ws.getUserData();
+                if (userData?.handler?.message) {
+                    userData.handler.message(userData.ws, message, userData.ctx);
+                }
+            },
+            open(ws) {
+                const userData = ws.getUserData();
+                userData.ws = new ExotWebSocket(exot, ws, userData.ctx);
+                if (userData?.handler?.open) {
+                    userData?.handler.open(userData.ws, userData.ctx);
+                }
+            },
+            upgrade: async (res, req, context) => {
+                res.onAborted(() => {
+                    res.aborted = true;
+                });
+                const ctx = exot.context(new UwsRequest(req, res, context));
+                return awaitMaybePromise(() => exot.handle(ctx), () => {
+                    // noop
+                }, (_err) => {
+                    if (!res.aborted) {
+                        res.cork(() => {
+                            if (res.headersWritten) {
+                                res.end();
+                            }
+                            else {
+                                res.writeStatus('500');
+                                res.end('Unexpected server error');
+                            }
+                        });
+                        ctx.destroy();
+                    }
+                });
+            },
         });
     }
     #writeHead(ctx, res, body) {
@@ -168,9 +213,10 @@ export class UwsAdapter {
         });
     }
 }
-export class UwsRequest extends HttpRequest {
+export class UwsRequest extends ExotRequest {
     raw;
-    res;
+    rawRes;
+    rawContext;
     #buffer;
     #headers;
     method;
@@ -178,10 +224,11 @@ export class UwsRequest extends HttpRequest {
     #querystring;
     #remoteAddress;
     #stream;
-    constructor(raw, res) {
+    constructor(raw, rawRes, rawContext) {
         super();
         this.raw = raw;
-        this.res = res;
+        this.rawRes = rawRes;
+        this.rawContext = rawContext;
         this.method = this.raw.getCaseSensitiveMethod();
         this.#path = this.raw.getUrl();
         this.#querystring = this.raw.getQuery();
@@ -191,7 +238,7 @@ export class UwsRequest extends HttpRequest {
             let chunks = [];
             // force-read headers before the stream is read
             this.headers;
-            const res = this.res;
+            const res = this.rawRes;
             this.#buffer = new Promise((resolve) => {
                 res.onAborted(() => {
                     res.aborted = true;
@@ -217,11 +264,11 @@ export class UwsRequest extends HttpRequest {
                     ctrl = _ctrl;
                 },
             });
-            this.res.onAborted(() => {
-                this.res.aborted = true;
+            this.rawRes.onAborted(() => {
+                this.rawRes.aborted = true;
                 ctrl.error(new Error('Request stream aborted.'));
             });
-            this.res.onData((chunk, isLast) => {
+            this.rawRes.onData((chunk, isLast) => {
                 // chunk must be copied using slice
                 ctrl.enqueue(new Uint8Array(chunk.slice(0)));
                 if (isLast) {
@@ -233,7 +280,7 @@ export class UwsRequest extends HttpRequest {
     }
     get headers() {
         if (!this.#headers) {
-            this.#headers = new HttpHeaders();
+            this.#headers = new ExotHeaders();
             this.raw.forEach((k, v) => {
                 this.#headers?.append(k, v);
             });
@@ -247,11 +294,11 @@ export class UwsRequest extends HttpRequest {
         return Promise.resolve(new Blob([]));
     }
     clone() {
-        return new UwsRequest(this.raw, this.res);
+        return new UwsRequest(this.raw, this.rawRes);
     }
     formData() {
         return this.arrayBuffer()
-            .then((body) => parseFormData(String(this.headers.get('content-type') || ''), body));
+            .then((body) => parseFormData(String(this.headers.get('Content-Type') || ''), body));
     }
     json() {
         return this.text()
@@ -263,7 +310,7 @@ export class UwsRequest extends HttpRequest {
     }
     remoteAddress() {
         if (!this.#remoteAddress) {
-            this.#remoteAddress = textDecoder.decode(this.res.getRemoteAddressAsText());
+            this.#remoteAddress = textDecoder.decode(this.rawRes.getRemoteAddressAsText());
         }
         return this.#remoteAddress;
     }

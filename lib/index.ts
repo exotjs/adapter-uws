@@ -7,14 +7,21 @@ import {
   us_listen_socket_close,
   us_listen_socket as Socket,
   type WebSocketBehavior,
-  type WebSocket,
   HttpRequest as UWSRequest,
+  us_socket_context_t,
 } from 'uWebSockets.js';
 import { Exot } from '@exotjs/exot';
 import { awaitMaybePromise, parseFormData } from '@exotjs/exot/helpers';
-import { HttpHeaders } from '@exotjs/exot/headers';
-import { HttpRequest } from '@exotjs/exot/request';
-import type { Adapter, ContextInterface, WsHandler } from '@exotjs/exot/types';
+import { ExotHeaders } from '@exotjs/exot/headers';
+import { ExotRequest } from '@exotjs/exot/request';
+import { ExotWebSocket } from '@exotjs/exot/websocket';
+import type { Adapter, ContextInterface, WebSocketHandler } from '@exotjs/exot/types';
+
+export interface UwsWebSocketUserData {
+  ctx: ContextInterface;
+  handler: WebSocketHandler;
+  ws: ExotWebSocket<any, any>;
+}
 
 const textDecoder = new TextDecoder();
 
@@ -26,7 +33,7 @@ export class UwsAdapter implements Adapter {
   static defaultWebSocketOptions<UserData = unknown>(): WebSocketBehavior<UserData> {
     return {
       compression: SHARED_COMPRESSOR,
-      idleTimeout: 120,
+      idleTimeout: 30,
       maxBackpressure: 1024,
       maxPayloadLength: 16 * 1024 * 1024, // 16MB
     };
@@ -65,28 +72,26 @@ export class UwsAdapter implements Adapter {
     });
   }
 
-  ws<UserData = unknown>(path: string, handler: WsHandler<WebSocket<UserData>>) {
-    this.#uws.ws(path, {
-      ...UwsAdapter.defaultWebSocketOptions<UserData>(),
-      open: handler.open,
-      close: handler.close,
-      message: handler.message,
-      upgrade: async (res, req, context) => {
-        if (handler.upgrade) {
-          // TODO:
-          // await handler.upgrade(new UwsRequest(req, res), res);
-        }
-        res.upgrade(
-          {},
-          req.getHeader('sec-websocket-key'),
-          req.getHeader('sec-websocket-protocol'),
-          req.getHeader('sec-websocket-extensions'),
-          context,
-        );
-      },
-    });
-  }
   mount(exot: Exot) {
+    this.#mountRequestHandler(exot);
+    this.#mountWebSocketHandler(exot);
+  }
+
+  upgradeRequest(ctx: ContextInterface, handler: WebSocketHandler) {
+    const { raw, rawRes, rawContext } = ctx.req as UwsRequest;
+    rawRes.upgrade(
+      {
+        ctx,
+        handler,
+      },
+      raw.getHeader('sec-websocket-key'),
+      raw.getHeader('sec-websocket-protocol'),
+      raw.getHeader('sec-websocket-extensions'),
+      rawContext!,
+    );
+  }
+
+  #mountRequestHandler(exot: Exot) {
     this.#uws.any('/*', (res, req) => {
       res.pause();
       res.onAborted(() => {
@@ -122,11 +127,63 @@ export class UwsAdapter implements Adapter {
       );
     });
   }
+  
+  #mountWebSocketHandler(exot: Exot) {
+    this.#uws.ws('/*', {
+      close(ws) {
+        const userData = ws.getUserData() as UwsWebSocketUserData;
+        if (userData?.handler?.close) {
+          userData.handler.close(userData.ws, userData.ctx);
+        }
+      },
+      drain(ws) {
+        // TODO:
+      },
+      message(ws, message) {
+        const userData = ws.getUserData() as UwsWebSocketUserData;
+        if (userData?.handler?.message) {
+          userData.handler.message(userData.ws, message, userData.ctx);
+        }
+      },
+      open(ws) {
+        const userData = ws.getUserData() as UwsWebSocketUserData;
+        userData.ws = new ExotWebSocket(exot, ws, userData.ctx);
+        if (userData?.handler?.open) {
+          userData?.handler.open(userData.ws, userData.ctx);
+        }
+      },
+      upgrade: async (res, req, context) => {
+        res.onAborted(() => {
+          res.aborted = true;
+        });
+        const ctx = exot.context(new UwsRequest(req, res, context));
+        return awaitMaybePromise(
+          () => exot.handle(ctx),
+          () => {
+            // noop
+          },
+          (_err) => {
+            if (!res.aborted) {
+              res.cork(() => {
+                if (res.headersWritten) {
+                  res.end();
+                } else {
+                  res.writeStatus('500');
+                  res.end('Unexpected server error');
+                }
+              });
+              ctx.destroy();
+            }
+          },
+        );
+      },
+    });
+  }
 
   #writeHead(ctx: ContextInterface, res: HttpResponse, body?: any) {
     res.cork(() => {
       res.writeStatus(String(ctx.res.status || 200));
-      const headers = ctx.res.headers as HttpHeaders;
+      const headers = ctx.res.headers as ExotHeaders;
       for (let k in headers.map) {
         const v = headers.map[k];
         if (v !== null) {
@@ -201,10 +258,10 @@ export class UwsAdapter implements Adapter {
   }
 }
 
-export class UwsRequest extends HttpRequest {
+export class UwsRequest extends ExotRequest {
   #buffer?: Promise<Buffer>;
 
-  #headers?: HttpHeaders;
+  #headers?: ExotHeaders;
 
   readonly method: string;
 
@@ -216,7 +273,7 @@ export class UwsRequest extends HttpRequest {
 
   #stream?: ReadableStream<Uint8Array>;
 
-  constructor(readonly raw: UWSRequest, readonly res: HttpResponse) {
+  constructor(readonly raw: UWSRequest, readonly rawRes: HttpResponse, readonly rawContext?: us_socket_context_t) {
     super();
     this.method = this.raw.getCaseSensitiveMethod();
     this.#path = this.raw.getUrl();
@@ -228,7 +285,7 @@ export class UwsRequest extends HttpRequest {
       let chunks: Buffer[] = []
       // force-read headers before the stream is read
       this.headers;
-      const res = this.res;
+      const res = this.rawRes;
       this.#buffer = new Promise((resolve) => {
         res.onAborted(() => {
           res.aborted = true;
@@ -255,11 +312,11 @@ export class UwsRequest extends HttpRequest {
           ctrl = _ctrl;
         },
       });
-      this.res.onAborted(() => {
-        this.res.aborted = true;
+      this.rawRes.onAborted(() => {
+        this.rawRes.aborted = true;
         ctrl.error(new Error('Request stream aborted.'));
       });
-      this.res.onData((chunk, isLast) => {
+      this.rawRes.onData((chunk, isLast) => {
         // chunk must be copied using slice
         ctrl.enqueue(new Uint8Array(chunk.slice(0)));
         if (isLast) {
@@ -270,9 +327,9 @@ export class UwsRequest extends HttpRequest {
     return this.#stream;
   }
 
-  get headers(): HttpHeaders {
+  get headers(): ExotHeaders {
     if (!this.#headers) {
-      this.#headers = new HttpHeaders();
+      this.#headers = new ExotHeaders();
       this.raw.forEach((k, v) => {
         this.#headers?.append(k, v);
       });
@@ -289,12 +346,12 @@ export class UwsRequest extends HttpRequest {
   }
 
   clone() {
-    return new UwsRequest(this.raw, this.res);
+    return new UwsRequest(this.raw, this.rawRes);
   }
 
   formData() {
     return this.arrayBuffer()
-      .then((body) => parseFormData(String(this.headers.get('content-type') || ''), body));
+      .then((body) => parseFormData(String(this.headers.get('Content-Type') || ''), body));
   }
 
   json() {
@@ -309,7 +366,7 @@ export class UwsRequest extends HttpRequest {
 
   remoteAddress(): string {
     if (!this.#remoteAddress) {
-      this.#remoteAddress = textDecoder.decode(this.res.getRemoteAddressAsText());
+      this.#remoteAddress = textDecoder.decode(this.rawRes.getRemoteAddressAsText());
     }
     return this.#remoteAddress;
   }

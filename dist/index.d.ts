@@ -1,8 +1,14 @@
-import { HttpResponse, type WebSocketBehavior, type WebSocket, HttpRequest as UWSRequest } from 'uWebSockets.js';
+import { HttpResponse, type WebSocketBehavior, HttpRequest as UWSRequest, us_socket_context_t } from 'uWebSockets.js';
 import { Exot } from '@exotjs/exot';
-import { HttpHeaders } from '@exotjs/exot/headers';
-import { HttpRequest } from '@exotjs/exot/request';
-import type { Adapter, WsHandler } from '@exotjs/exot/types';
+import { ExotHeaders } from '@exotjs/exot/headers';
+import { ExotRequest } from '@exotjs/exot/request';
+import { ExotWebSocket } from '@exotjs/exot/websocket';
+import type { Adapter, ContextInterface, WebSocketHandler } from '@exotjs/exot/types';
+export interface UwsWebSocketUserData {
+    ctx: ContextInterface;
+    handler: WebSocketHandler;
+    ws: ExotWebSocket<any, any>;
+}
 export declare const adapter: () => UwsAdapter;
 export default adapter;
 export declare class UwsAdapter implements Adapter {
@@ -11,18 +17,19 @@ export declare class UwsAdapter implements Adapter {
     close(): Promise<void>;
     fetch(req: Request): Promise<Response>;
     listen(port?: number, host?: string): Promise<number>;
-    ws<UserData = unknown>(path: string, handler: WsHandler<WebSocket<UserData>>): void;
     mount(exot: Exot): void;
+    upgradeRequest(ctx: ContextInterface, handler: WebSocketHandler): void;
 }
-export declare class UwsRequest extends HttpRequest {
+export declare class UwsRequest extends ExotRequest {
     #private;
     readonly raw: UWSRequest;
-    readonly res: HttpResponse;
+    readonly rawRes: HttpResponse;
+    readonly rawContext?: us_socket_context_t | undefined;
     readonly method: string;
-    constructor(raw: UWSRequest, res: HttpResponse);
+    constructor(raw: UWSRequest, rawRes: HttpResponse, rawContext?: us_socket_context_t | undefined);
     arrayBuffer(): Promise<ArrayBuffer>;
     get body(): ReadableStream<Uint8Array>;
-    get headers(): HttpHeaders;
+    get headers(): ExotHeaders;
     get url(): string;
     blob(): Promise<Blob>;
     clone(): UwsRequest;

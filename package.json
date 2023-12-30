@@ -1,6 +1,6 @@
 {
   "name": "@exotjs/adapter-uws",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "uWebSockets.js adapter for Exot.",
   "author": "Daniel Regeci",
   "license": "MIT",
@@ -28,7 +28,7 @@
     }
   },
   "dependencies": {
-    "@exotjs/exot": "0.1.0",
+    "@exotjs/exot": "0.1.2",
     "uWebSockets.js": "uNetworking/uWebSockets.js#v20.34.0"
   },
   "devDependencies": {
@@ -40,6 +40,6 @@
     "vitest": "^1.0.1"
   },
   "peerDependencies": {
-    "@exotjs/exot": ">= 0.1.0"
+    "@exotjs/exot": ">= 0.1.2"
   }
 }
